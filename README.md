@@ -1,6 +1,10 @@
-# CursorCast — Chrome Extension
+# CursorCast
 
-Screen recorder Chrome extension with automatic zoom-on-click and an emulated mouse cursor baked into the video.
+> Chrome extension that records your tab with an emulated cursor and auto-zoom on clicks. MP4 output, YouTube-ready.
+
+<p align="center">
+  <img src="demo.gif" alt="CursorCast demo — recording a browser tab" width="720">
+</p>
 
 ## Features
 
@@ -14,11 +18,13 @@ Screen recorder Chrome extension with automatic zoom-on-click and an emulated mo
 
 ## Install
 
-1. Clone this repo
-2. Open `chrome://extensions` in Chrome
-3. Enable "Developer mode" (top right)
-4. Click "Load unpacked" and select the `cursorful-ext/` directory
-5. Pin the extension in the toolbar
+```bash
+git clone https://github.com/ademczuk/cursorcast.git
+```
+1. Open `chrome://extensions`
+2. Enable **Developer mode** (top right toggle)
+3. Click **Load unpacked** and select the cloned `cursorcast/` folder
+4. Pin the extension in the toolbar
 
 ## Usage
 
