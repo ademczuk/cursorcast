@@ -15,6 +15,13 @@ let isRecording = false;
 let activeTabId = null;
 let recordingStartTime = 0;
 
+// ── Telemetry Collection (for Remotion post-processing) ─────────────
+// Cursor positions and clicks are recorded alongside the video so they
+// can be fed into the Remotion pipeline for non-destructive compositing.
+
+let telemetryBuffer = [];     // Array of { t, x, y, type: 'move'|'click' }
+let telemetryFps = 30;        // Matches the offscreen render loop fps
+
 // ── State Persistence (survives service worker restarts) ────────────────
 // MV3 service workers can be killed at any time. We use chrome.storage.local
 // to persist recording state. The popup reads directly from storage (no
@@ -74,12 +81,20 @@ async function injectAndStartTracking(tabId) {
 // ── Message Router ─────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Mouse events from content script → forward to offscreen
+  // Mouse events from content script → forward to offscreen + collect telemetry
   if (msg.type === 'MOUSE_MOVE' || msg.type === 'MOUSE_CLICK') {
     // Wait for state restoration in case service worker just restarted
     stateReady.then(() => {
       if (isRecording) {
         chrome.runtime.sendMessage({ ...msg, target: 'offscreen' }).catch(() => {});
+
+        // Collect telemetry for Remotion post-processing
+        telemetryBuffer.push({
+          t: msg.t || Date.now(),
+          x: msg.x,
+          y: msg.y,
+          type: msg.type === 'MOUSE_CLICK' ? 'click' : 'move',
+        });
       }
     });
     return;
@@ -103,10 +118,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Download request from offscreen document
   if (msg.type === 'DOWNLOAD_READY') {
     const ext = msg.ext || 'webm';
+    const timestamp = Date.now();
     console.log('[background] Download ready, size:', msg.size, 'bytes, format:', ext);
+
+    // Export telemetry JSON alongside the video
+    exportTelemetry(timestamp);
+
     chrome.downloads.download({
       url: msg.url,
-      filename: `cursorcast-${Date.now()}.${ext}`,
+      filename: `cursorcast-${timestamp}.${ext}`,
       saveAs: true,
     }, (downloadId) => {
       if (chrome.runtime.lastError) {
@@ -141,6 +161,106 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ── Recording Lifecycle ────────────────────────────────────────────────
+
+// ── Telemetry Export ──────────────────────────────────────────────────
+// Builds a Remotion-compatible telemetry JSON from the collected buffer
+// and triggers a download alongside the video file.
+
+function exportTelemetry(timestamp) {
+  if (telemetryBuffer.length === 0) {
+    console.log('[background] No telemetry to export');
+    return;
+  }
+
+  const durationMs = telemetryBuffer.length > 0
+    ? telemetryBuffer[telemetryBuffer.length - 1].t - telemetryBuffer[0].t
+    : 0;
+  const startT = telemetryBuffer[0].t;
+
+  // Convert timestamps to frame numbers
+  const cursor = telemetryBuffer.map((entry) => ({
+    frame: Math.round(((entry.t - startT) / 1000) * telemetryFps),
+    x: entry.x,
+    y: entry.y,
+    clicked: entry.type === 'click',
+    t: entry.t,
+  }));
+
+  // Auto-detect zoom events from click clusters
+  const zoomEvents = detectClickClusters(cursor, telemetryFps);
+
+  const telemetry = {
+    fps: telemetryFps,
+    durationMs,
+    totalFrames: Math.round((durationMs / 1000) * telemetryFps),
+    cursor,
+    zoomEvents,
+  };
+
+  const json = JSON.stringify(telemetry, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  chrome.downloads.download({
+    url,
+    filename: `cursorcast-${timestamp}-telemetry.json`,
+    saveAs: false, // auto-save alongside the video
+  }, (downloadId) => {
+    if (chrome.runtime.lastError) {
+      console.warn('[background] Telemetry download failed:', chrome.runtime.lastError.message);
+    } else {
+      console.log('[background] Telemetry exported, entries:', cursor.length, 'zoom events:', zoomEvents.length);
+      // Revoke blob URL after download starts
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+  });
+}
+
+/**
+ * Detect click clusters and generate zoom events.
+ * 2+ clicks within CLUSTER_WINDOW_MS → zoom to centroid.
+ */
+function detectClickClusters(cursor, fps) {
+  const CLUSTER_WINDOW_MS = 3000;
+  const ZOOM_HOLD_FRAMES = Math.round(fps * 3); // Hold zoom for 3 seconds
+  const ZOOM_SCALE = 2.0;
+
+  const clicks = cursor.filter((c) => c.clicked);
+  if (clicks.length < 2) return [];
+
+  const events = [];
+  let i = 0;
+
+  while (i < clicks.length) {
+    // Find all clicks within the window starting from clicks[i]
+    const cluster = [clicks[i]];
+    let j = i + 1;
+    while (j < clicks.length && clicks[j].t - clicks[i].t < CLUSTER_WINDOW_MS) {
+      cluster.push(clicks[j]);
+      j++;
+    }
+
+    if (cluster.length >= 2) {
+      // Compute centroid
+      const focusX = cluster.reduce((sum, c) => sum + c.x, 0) / cluster.length;
+      const focusY = cluster.reduce((sum, c) => sum + c.y, 0) / cluster.length;
+      const startFrame = cluster[0].frame;
+      const endFrame = cluster[cluster.length - 1].frame + ZOOM_HOLD_FRAMES;
+
+      // Don't overlap with previous event
+      const prev = events[events.length - 1];
+      if (!prev || startFrame > prev.endFrame) {
+        events.push({ startFrame, endFrame, focusX, focusY, scale: ZOOM_SCALE });
+      }
+
+      i = j; // Skip past this cluster
+    } else {
+      i++;
+    }
+  }
+
+  return events;
+}
 
 async function handleStartRecording(msg) {
   if (isRecording) return { success: false, error: 'Already recording' };
@@ -183,6 +303,7 @@ async function handleStartRecording(msg) {
 
   isRecording = true;
   recordingStartTime = Date.now();
+  telemetryBuffer = []; // Reset telemetry for new recording
   await persistState();
   return { success: true };
 }

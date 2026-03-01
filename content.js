@@ -26,6 +26,7 @@
         type: 'MOUSE_MOVE',
         x: Math.min(1, Math.max(0, normX)),
         y: Math.min(1, Math.max(0, normY)),
+        t: Date.now(),
       });
     } catch (e) { /* Service worker not ready */ }
   }

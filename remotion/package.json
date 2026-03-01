@@ -1,0 +1,26 @@
+{
+  "name": "cursorcast-remotion",
+  "version": "1.0.0",
+  "description": "Remotion post-processor for CursorCast screen recordings — adds zoom, cursor overlay, and wallpaper backgrounds",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "tsx render.ts",
+    "build": "remotion bundle src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.0",
+    "@remotion/cli": "^4.0.0",
+    "@remotion/player": "^4.0.0",
+    "@remotion/renderer": "^4.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "remotion": "^4.0.0",
+    "tsx": "^4.7.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.4.0"
+  }
+}
